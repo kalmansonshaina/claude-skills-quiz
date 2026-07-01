@@ -121,6 +121,7 @@
   // ---- State ----
   var state = { step:0, answers:{}, email:'', sent:false, locking:false, animA:true, displayScore:0 };
   var iv = null;
+  var lastRenderedStep = -1;
   var app = document.getElementById('app');
 
   // ---- Persistence ----
@@ -440,13 +441,19 @@
 
     var back=V.canBack?'<button data-action="back" class="cq-back" style="align-self:flex-start;display:inline-flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;color:var(--mut,#8A867A);font:600 14px \'Hanken Grotesk\';padding:0 0 18px;transition:color .15s;">← Back</button>':'';
 
+    // Only play the entrance animation on a real step change. Same-step
+    // re-renders (e.g. highlighting a selected answer) must not replay it,
+    // otherwise the screen visibly flashes/fades in again on every click.
+    var animCss=(state.step!==lastRenderedStep)?'animation:.45s cubic-bezier(.22,.61,.36,1) both '+V.animName+';':'';
+
     app.setAttribute('style',rootStyle);
     app.innerHTML=progressHTML(V)
       +'<div style="width:100%;max-width:640px;flex:1;display:flex;flex-direction:column;justify-content:center;padding:24px 0;">'
-      +'<div style="animation:.45s cubic-bezier(.22,.61,.36,1) both '+V.animName+';">'
+      +'<div style="'+animCss+'">'
       +back+screenHTML(V)
       +'</div></div>';
 
+    lastRenderedStep=state.step;
     bind();
   }
 
