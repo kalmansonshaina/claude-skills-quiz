@@ -36,6 +36,9 @@
   .cq-email:focus{border-color:var(--ac,#D97757)!important;box-shadow:0 0 0 3px rgba(217,119,87,.15)}
   .cq-restart:hover{color:var(--ac,#D97757)!important}
   .cq-restart-o:hover{border-color:var(--ac,#D97757)!important;color:var(--ac,#D97757)!important}
+  .cq-optout:hover .cq-optout-box{border-color:var(--ac,#D97757)!important}
+  .cq-optout:focus{outline:none}
+  .cq-optout:focus .cq-optout-box{box-shadow:0 0 0 3px rgba(217,119,87,.18)}
 </style>
 </head>
 <body>
@@ -43,6 +46,14 @@
 <script>
 "use strict";
 (function(){
+
+  // ---- Backend ----
+  // Deploy the Cloudflare Worker in /worker (see worker/README.md), then paste
+  // its URL here to turn on email capture + How-to-AI subscribe + the finish
+  // sequence. Left empty, the quiz still runs end-to-end (no network call).
+  var CONFIG = {
+    endpoint: '' // e.g. 'https://claude-quiz-capture.your-subdomain.workers.dev'
+  };
 
   // ---- Configuration (from the design's default props) ----
   var PROPS = {
@@ -119,18 +130,19 @@
   });
 
   // ---- State ----
-  var state = { step:0, answers:{}, email:'', sent:false, locking:false, animA:true, displayScore:0 };
+  var state = { step:0, answers:{}, email:'', sent:false, subscribe:true, locking:false, animA:true, displayScore:0 };
   var iv = null;
   var lastRenderedStep = -1;
   var app = document.getElementById('app');
 
   // ---- Persistence ----
-  function persist(){ try{ localStorage.setItem('claudeQuizV2',JSON.stringify({step:state.step,answers:state.answers,email:state.email,sent:state.sent})); }catch(e){} }
+  function persist(){ try{ localStorage.setItem('claudeQuizV2',JSON.stringify({step:state.step,answers:state.answers,email:state.email,sent:state.sent,subscribe:state.subscribe})); }catch(e){} }
   function load(){
     try{
       var s=JSON.parse(localStorage.getItem('claudeQuizV2')||'null');
       if(s&&typeof s.step==='number'){
         state.step=s.step; state.answers=s.answers||{}; state.email=s.email||''; state.sent=!!s.sent;
+        state.subscribe=s.subscribe!==false;
       }
     }catch(e){}
   }
@@ -178,8 +190,26 @@
     if(!state.answers[id]){ state.answers[id]={idx:3,val:3}; persist(); next(); }
     else next();
   }
-  function submitEmail(){ if(!emailValid())return; state.sent=true; render(); persist(); next(); }
-  function restart(){ clearInterval(iv); state.step=0; state.answers={}; state.email=''; state.sent=false; state.displayScore=0; state.animA=!state.animA; render(); persist(); }
+  function toggleSubscribe(){ state.subscribe=!(state.subscribe!==false); render(); persist(); }
+  function submitEmail(){ if(!emailValid())return; sendCapture(); state.sent=true; render(); persist(); next(); }
+  function restart(){ clearInterval(iv); state.step=0; state.answers={}; state.email=''; state.sent=false; state.subscribe=true; state.displayScore=0; state.animA=!state.animA; render(); persist(); }
+
+  // Fire-and-forget: hand the result off to the Worker, which subscribes the
+  // person to How to AI (unless they opted out) and enrolls them in the finish
+  // sequence. UX never blocks on the network; failures are swallowed.
+  function sendCapture(){
+    if(!CONFIG.endpoint) return;
+    try{
+      var lvl=level();
+      var payload={
+        email:(state.email||'').trim(),
+        subscribe:state.subscribe!==false,
+        level:lvl, levelName:L[lvl].name, score:score(), gap:biggestGap(),
+        answers:state.answers, source:'claude-skills-quiz', ts:new Date().toISOString()
+      };
+      fetch(CONFIG.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true}).catch(function(){});
+    }catch(e){}
+  }
 
   function animateScore(){
     var target=score();
@@ -275,7 +305,7 @@
       breakBtn: id==='break1'?'I’m ready →':'Bring it on →',
       levelNum:lvl.num, levelName:lvl.name, diagnosis:lvl.diag, ringDeg:ringDeg,
       gapName:gap.name, gapFix:gap.fix,
-      email:state.email, submitStyle:emailValid()?'':'opacity:.5;pointer-events:none;',
+      email:state.email, subscribe:state.subscribe!==false, submitStyle:emailValid()?'':'opacity:.5;pointer-events:none;',
       confirmSubject:lvl.subject
     };
   }
@@ -404,7 +434,10 @@
       +'<p style="font:400 18px/1.55 \'Hanken Grotesk\';color:var(--mut,#5A564C);max-width:440px;margin:0 auto 32px;">A 7-day plan built for your level, matched to exactly how you answered.</p>'
       +'<div style="max-width:420px;margin:0 auto;background:var(--card,#fff);border:1px solid var(--line,#E7E3D7);border-radius:16px;padding:24px;">'
       +'<input id="cq-email" class="cq-email" type="email" value="'+esc(V.email)+'" placeholder="you@work.com" style="width:100%;padding:15px 16px;border-radius:11px;border:1.5px solid var(--line,#E2DDCE);background:var(--soft,#FCFBF7);font:500 16px \'Hanken Grotesk\';color:var(--ink,#21201C);outline:none;transition:border-color .15s,box-shadow .15s;">'
-      +'<button data-action="submit" class="cq-tap" style="margin-top:12px;width:100%;background:var(--ac,#D97757);color:#fff;border:none;padding:16px;border-radius:11px;font:700 17px \'Hanken Grotesk\';cursor:pointer;transition:filter .15s,transform .15s;'+V.submitStyle+'">Send it →</button>'
+      +'<div class="cq-optout" data-action="toggleSubscribe" role="checkbox" aria-checked="'+(V.subscribe?'true':'false')+'" tabindex="0" style="display:flex;align-items:flex-start;gap:10px;margin-top:14px;text-align:left;cursor:pointer;user-select:none;">'
+      +'<span class="cq-optout-box" style="flex:none;width:20px;height:20px;border-radius:6px;margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;transition:background .15s,border-color .15s;border:1.5px solid '+(V.subscribe?'var(--ac,#D97757)':'var(--line,#E2DDCE)')+';background:'+(V.subscribe?'var(--ac,#D97757)':'transparent')+';">'+(V.subscribe?'✓':'')+'</span>'
+      +'<span style="font:500 13px/1.45 \'Hanken Grotesk\';color:var(--mut,#5A564C);">Subscribe me to Ruben’s Substack, <strong style="color:var(--ink,#21201C);">How to AI</strong> — free AI guides, twice a week. Uncheck to opt out.</span></div>'
+      +'<button data-action="submit" class="cq-tap" style="margin-top:16px;width:100%;background:var(--ac,#D97757);color:#fff;border:none;padding:16px;border-radius:11px;font:700 17px \'Hanken Grotesk\';cursor:pointer;transition:filter .15s,transform .15s;'+V.submitStyle+'">Send it →</button>'
       +'<div style="margin-top:14px;font:500 13px \'Hanken Grotesk\';color:var(--mut,#B0AB9C);">No spam. Just your plan and the resources to fix your level.</div></div></div>';
   }
 
@@ -467,8 +500,12 @@
         else if(a==='choose') choose(Number(el.getAttribute('data-i')));
         else if(a==='sliderContinue') sliderContinue();
         else if(a==='submit') submitEmail();
+        else if(a==='toggleSubscribe') toggleSubscribe();
         else if(a==='restart') restart();
       });
+      if(el.getAttribute('data-action')==='toggleSubscribe'){
+        el.addEventListener('keydown',function(e){ if(e.key===' '||e.key==='Enter'){ e.preventDefault(); toggleSubscribe(); } });
+      }
     });
     var slider=document.getElementById('cq-slider');
     if(slider){
